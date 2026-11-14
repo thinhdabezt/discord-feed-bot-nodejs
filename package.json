@@ -1,0 +1,33 @@
+{
+  "name": "discord-feed-bot",
+  "version": "1.0.0",
+  "description": "Discord bot that scrapes social media feeds (X/Twitter) and posts to Discord channels via webhooks and slash commands",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "tsx test/verify.ts",
+    "register": "tsx src/bot/register.ts"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "feed",
+    "twitter",
+    "x"
+  ],
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
