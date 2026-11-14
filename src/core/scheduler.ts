@@ -94,7 +94,9 @@ export class Scheduler {
 
   addTarget(target: Target): void {
     const idx = this.targets.findIndex(
-      (t) => t.handle.toLowerCase() === target.handle.toLowerCase() && t.platform === target.platform,
+      (t) =>
+        t.handle.toLowerCase() === target.handle.toLowerCase() &&
+        t.platform === target.platform,
     );
     if (idx >= 0) {
       this.targets[idx] = target;
@@ -108,7 +110,11 @@ export class Scheduler {
   removeTarget(platform: string, handle: string): boolean {
     const before = this.targets.length;
     this.targets = this.targets.filter(
-      (t) => !(t.handle.toLowerCase() === handle.toLowerCase() && t.platform === platform),
+      (t) =>
+        !(
+          t.handle.toLowerCase() === handle.toLowerCase() &&
+          t.platform === platform
+        ),
     );
     const removed = this.targets.length < before;
     if (removed) {
@@ -189,9 +195,23 @@ export class Scheduler {
     logger.debug(`Fetching latest for ${target.platform}/${target.handle}`);
     const items = await provider.fetchLatest(target.handle);
 
+    const targetsConfig = config.loadTargets();
+    const isMediaOnly =
+      target.mediaOnly ?? targetsConfig.settings.mediaOnlyDefault ?? true;
+
     let newCount = 0;
     for (const item of items) {
       if (!this.database.isPostSeen(item.id)) {
+        // Media filter check
+        if (isMediaOnly && !item.hasMedia) {
+          logger.debug(
+            `[Filter] Bỏ qua bài viết text-only ${item.id} của @${target.handle} (mediaOnly=true)`,
+          );
+          // Mark post as seen so we don't re-process in subsequent cycles
+          this.database.markPostSeen(item);
+          continue;
+        }
+
         await this.dispatcher.dispatch(item, target);
         this.database.markPostSeen(item);
         newCount++;
@@ -199,7 +219,9 @@ export class Scheduler {
     }
 
     if (newCount > 0) {
-      logger.info(`${target.platform}/${target.handle}: ${newCount} new post(s) dispatched`);
+      logger.info(
+        `${target.platform}/${target.handle}: ${newCount} new post(s) dispatched`,
+      );
     } else {
       logger.debug(`${target.platform}/${target.handle}: no new posts`);
     }

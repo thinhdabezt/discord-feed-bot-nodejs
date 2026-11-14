@@ -19,7 +19,9 @@ export class Dispatcher {
   async dispatch(item: FeedItem, target: Target): Promise<void> {
     const webhookUrl = target.webhookUrl;
     if (!webhookUrl) {
-      logger.warn(`No webhook URL configured for target ${target.platform}/${target.handle}`);
+      logger.warn(
+        `No webhook URL configured for target ${target.platform}/${target.handle}`,
+      );
       return;
     }
 
@@ -38,13 +40,21 @@ export class Dispatcher {
         ? `https://x.com/${item.authorHandle}`
         : item.url;
 
+    let description = item.content || '';
+    if (item.videoUrl) {
+      const videoBadge = `\n\n▶️ **[Xem Video](${item.videoUrl})**`;
+      description = description
+        ? `${description}${videoBadge}`
+        : `▶️ **[Xem Video](${item.videoUrl})**`;
+    }
+
     const baseEmbed: any = {
       author: {
         name: `${item.authorName} (@${item.authorHandle})`,
         url: authorUrl,
         icon_url: item.authorAvatar || undefined,
       },
-      description: item.content || undefined,
+      description: description || undefined,
       url: item.url,
       color,
       timestamp: item.createdAt.toISOString(),
@@ -77,7 +87,11 @@ export class Dispatcher {
   /**
    * Sends the feed item to a Discord webhook with retry & rate-limit handling.
    */
-  async sendFeedItem(item: FeedItem, webhookUrl: string, maxRetries = 3): Promise<void> {
+  async sendFeedItem(
+    item: FeedItem,
+    webhookUrl: string,
+    maxRetries = 3,
+  ): Promise<void> {
     const payload = this.buildPayload(item);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -98,14 +112,19 @@ export class Dispatcher {
         if (response.status === 429) {
           // Rate limited by Discord
           const rateData = (await response.json().catch(() => ({}))) as any;
-          const retryAfterMs = (rateData.retry_after ? rateData.retry_after * 1000 : 2000) + 200;
-          logger.warn(`Discord rate limit hit (429). Retrying after ${retryAfterMs}ms`);
+          const retryAfterMs =
+            (rateData.retry_after ? rateData.retry_after * 1000 : 2000) + 200;
+          logger.warn(
+            `Discord rate limit hit (429). Retrying after ${retryAfterMs}ms`,
+          );
           await sleep(retryAfterMs);
           continue;
         }
 
         const errorText = await response.text().catch(() => 'No response body');
-        logger.error(`Discord webhook responded with HTTP ${response.status}: ${errorText}`);
+        logger.error(
+          `Discord webhook responded with HTTP ${response.status}: ${errorText}`,
+        );
 
         if (response.status >= 500 && attempt < maxRetries) {
           await sleep(Math.pow(2, attempt) * 1000);

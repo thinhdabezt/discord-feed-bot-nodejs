@@ -124,7 +124,7 @@ async function resolveRestId(handle: string, db: Database): Promise<string> {
 /**
  * Parse a single tweet result object into a FeedItem.
  */
-function parseTweetResult(result: any): FeedItem | null {
+export function parseTweetResult(result: any): FeedItem | null {
   try {
     const tweet =
       result.__typename === 'TweetWithVisibilityResults'
@@ -149,10 +149,40 @@ function parseTweetResult(result: any): FeedItem | null {
 
     const content: string = legacy.full_text ?? '';
 
-    const mediaUrls: string[] = (legacy.entities?.media ?? []).map(
-      (m: any) => `${m.media_url_https}?format=jpg&name=large`,
-    );
+    // Inspect extended_entities first (contains full media including videos and multiple photos), fallback to entities
+    const rawMediaList: any[] =
+      legacy.extended_entities?.media ?? legacy.entities?.media ?? [];
 
+    const mediaUrls: string[] = [];
+    let videoUrl: string | undefined;
+
+    for (const m of rawMediaList) {
+      if (m.type === 'video' || m.type === 'animated_gif') {
+        // Collect video thumbnail
+        if (m.media_url_https) {
+          mediaUrls.push(`${m.media_url_https}?format=jpg&name=large`);
+        }
+        // Extract highest quality MP4 video variant
+        const variants: any[] = m.video_info?.variants ?? [];
+        const mp4Variants = variants
+          .filter(
+            (v: any) =>
+              v.content_type === 'video/mp4' && typeof v.url === 'string',
+          )
+          .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+
+        if (mp4Variants.length > 0 && !videoUrl) {
+          videoUrl = mp4Variants[0].url;
+        }
+      } else {
+        // Regular photo
+        if (m.media_url_https) {
+          mediaUrls.push(`${m.media_url_https}?format=jpg&name=large`);
+        }
+      }
+    }
+
+    const hasMedia = mediaUrls.length > 0 || Boolean(videoUrl);
     const createdAt = new Date(legacy.created_at);
     const url = `https://x.com/${authorHandle}/status/${tweetId}`;
     const id = `x:${tweetId}`;
@@ -166,6 +196,8 @@ function parseTweetResult(result: any): FeedItem | null {
       content,
       url,
       mediaUrls,
+      videoUrl,
+      hasMedia,
       createdAt,
     };
   } catch (error) {

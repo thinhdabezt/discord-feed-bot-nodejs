@@ -4,7 +4,7 @@ import {
   EmbedBuilder,
   PermissionFlagsBits,
 } from 'discord.js';
-import { config, loadTargets, saveTargets, type Target } from '../../core/config.js';
+import { loadTargets, saveTargets, type Target } from '../../core/config.js';
 import { scheduler } from '../../core/scheduler.js';
 import { logger } from '../../utils/logger.js';
 
@@ -37,8 +37,49 @@ export const feedCommandData = new SlashCommandBuilder()
       .addStringOption((option) =>
         option
           .setName('webhook_url')
-          .setDescription('URL Webhook nhận bài viết (nếu để trống sẽ dùng webhook mặc định)')
+          .setDescription(
+            'URL Webhook nhận bài viết (nếu để trống sẽ dùng webhook mặc định)',
+          )
           .setRequired(false),
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName('media_only')
+          .setDescription(
+            'Chỉ gửi bài có ảnh hoặc video? (Mặc định: True)',
+          )
+          .setRequired(false),
+      ),
+  )
+  // Subcommand: set-filter
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('set-filter')
+      .setDescription('Bật/tắt bộ lọc chỉ gửi bài có ảnh/video cho tài khoản')
+      .addStringOption((option) =>
+        option
+          .setName('platform')
+          .setDescription('Nền tảng mạng xã hội')
+          .setRequired(true)
+          .addChoices(
+            { name: 'X (Twitter)', value: 'x' },
+            { name: 'Instagram', value: 'ig' },
+            { name: 'Facebook', value: 'fb' },
+          ),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('handle')
+          .setDescription('Username / Handle cần chỉnh sửa')
+          .setRequired(true),
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName('media_only')
+          .setDescription(
+            'True: Chỉ gửi bài có ảnh/video | False: Gửi tất cả bài viết',
+          )
+          .setRequired(true),
       ),
   )
   // Subcommand: remove
@@ -80,15 +121,21 @@ export const feedCommandData = new SlashCommandBuilder()
 /**
  * Handle execution of /feed slash commands.
  */
-export async function handleFeedCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function handleFeedCommand(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
   const subcommand = interaction.options.getSubcommand();
 
   switch (subcommand) {
     case 'add': {
-      const platform = interaction.options.getString('platform', true) as 'x' | 'ig' | 'fb';
+      const platform = interaction.options.getString('platform', true) as
+        | 'x'
+        | 'ig'
+        | 'fb';
       let handle = interaction.options.getString('handle', true).trim();
       handle = handle.replace(/^@/, '');
       const webhookUrl = interaction.options.getString('webhook_url');
+      const mediaOnly = interaction.options.getBoolean('media_only') ?? true;
 
       const currentConfig = loadTargets();
 
@@ -96,12 +143,15 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
       let finalWebhookUrl = webhookUrl;
       if (!finalWebhookUrl) {
         finalWebhookUrl =
-          currentConfig.targets[0]?.webhookUrl || currentConfig.admin?.webhookUrl || '';
+          currentConfig.targets[0]?.webhookUrl ||
+          currentConfig.admin?.webhookUrl ||
+          '';
       }
 
       if (!finalWebhookUrl) {
         await interaction.reply({
-          content: '❌ Lỗi: Bạn cần cung cấp `webhook_url` do hệ thống chưa có webhook mặc định nào.',
+          content:
+            '❌ Lỗi: Bạn cần cung cấp `webhook_url` do hệ thống chưa có webhook mặc định nào.',
           ephemeral: true,
         });
         return;
@@ -109,7 +159,9 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
 
       // Check if target already exists
       const existingIdx = currentConfig.targets.findIndex(
-        (t) => t.platform === platform && t.handle.toLowerCase() === handle.toLowerCase(),
+        (t) =>
+          t.platform === platform &&
+          t.handle.toLowerCase() === handle.toLowerCase(),
       );
 
       const newTarget: Target = {
@@ -117,6 +169,7 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
         handle,
         webhookUrl: finalWebhookUrl,
         enabled: true,
+        mediaOnly,
       };
 
       if (existingIdx >= 0) {
@@ -132,12 +185,61 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
         .setColor(0x00ff7f)
         .setTitle('✅ Đã thêm tài khoản theo dõi')
         .setDescription(
-          `**Platform:** ${platform.toUpperCase()}\n**Handle:** @${handle}\n**Webhook:** \`${finalWebhookUrl.slice(0, 45)}...\``,
+          `**Platform:** ${platform.toUpperCase()}\n**Handle:** @${handle}\n**Bộ lọc:** ${
+            mediaOnly ? '🖼️ Chỉ Ảnh/Video (Media Only)' : '📄 Tất cả bài viết (All Posts)'
+          }\n**Webhook:** \`${finalWebhookUrl.slice(0, 45)}...\``,
         )
         .setTimestamp();
 
       await interaction.reply({ embeds: [embed] });
-      logger.info(`Command /feed add: added ${platform}/@${handle}`);
+      logger.info(
+        `Command /feed add: added ${platform}/@${handle} (mediaOnly=${mediaOnly})`,
+      );
+      break;
+    }
+
+    case 'set-filter': {
+      const platform = interaction.options.getString('platform', true) as
+        | 'x'
+        | 'ig'
+        | 'fb';
+      let handle = interaction.options.getString('handle', true).trim();
+      handle = handle.replace(/^@/, '');
+      const mediaOnly = interaction.options.getBoolean('media_only', true);
+
+      const currentConfig = loadTargets();
+      const target = currentConfig.targets.find(
+        (t) =>
+          t.platform === platform &&
+          t.handle.toLowerCase() === handle.toLowerCase(),
+      );
+
+      if (!target) {
+        await interaction.reply({
+          content: `⚠️ Không tìm thấy tài khoản **${platform.toUpperCase()}**: \`@${handle}\` trong danh sách.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      target.mediaOnly = mediaOnly;
+      saveTargets(currentConfig);
+      scheduler.addTarget(target);
+
+      const embed = new EmbedBuilder()
+        .setColor(0x1da1f2)
+        .setTitle('⚙️ Đã cập nhật bộ lọc media')
+        .setDescription(
+          `Tài khoản **${platform.toUpperCase()}**: \`@${handle}\` hiện được thiết lập: **${
+            mediaOnly ? '🖼️ Chỉ gửi bài có Ảnh/Video' : '📄 Gửi tất cả bài viết'
+          }**`,
+        )
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [embed] });
+      logger.info(
+        `Command /feed set-filter: updated ${platform}/@${handle} (mediaOnly=${mediaOnly})`,
+      );
       break;
     }
 
@@ -150,7 +252,11 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
       const beforeCount = currentConfig.targets.length;
 
       currentConfig.targets = currentConfig.targets.filter(
-        (t) => !(t.platform === platform && t.handle.toLowerCase() === handle.toLowerCase()),
+        (t) =>
+          !(
+            t.platform === platform &&
+            t.handle.toLowerCase() === handle.toLowerCase()
+          ),
       );
 
       const removed = currentConfig.targets.length < beforeCount;
@@ -169,7 +275,9 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
       const embed = new EmbedBuilder()
         .setColor(0xff4500)
         .setTitle('🗑️ Đã xóa tài khoản theo dõi')
-        .setDescription(`Đã xóa **${platform.toUpperCase()}**: \`@${handle}\` khỏi danh sách.`)
+        .setDescription(
+          `Đã xóa **${platform.toUpperCase()}**: \`@${handle}\` khỏi danh sách.`,
+        )
         .setTimestamp();
 
       await interaction.reply({ embeds: [embed] });
@@ -182,7 +290,8 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
 
       if (currentTargets.length === 0) {
         await interaction.reply({
-          content: 'ℹ️ Hiện chưa có tài khoản nào trong danh sách theo dõi. Dùng `/feed add` để thêm!',
+          content:
+            'ℹ️ Hiện chưa có tài khoản nào trong danh sách theo dõi. Dùng `/feed add` để thêm!',
           ephemeral: true,
         });
         return;
@@ -195,11 +304,13 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
           currentTargets
             .map((t, i) => {
               const statusEmoji = t.enabled ? '🟢' : '🔴';
-              return `${i + 1}. ${statusEmoji} **[${t.platform.toUpperCase()}]** \`@${t.handle}\``;
+              const mediaBadge =
+                t.mediaOnly !== false ? '🖼️ Media Only' : '📄 All Posts';
+              return `${i + 1}. ${statusEmoji} **[${t.platform.toUpperCase()}]** \`@${t.handle}\` — \`${mediaBadge}\``;
             })
             .join('\n'),
         )
-        .setFooter({ text: 'Dùng /feed add hoặc /feed remove để quản lý' })
+        .setFooter({ text: 'Dùng /feed add, /feed set-filter hoặc /feed remove để quản lý' })
         .setTimestamp();
 
       await interaction.reply({ embeds: [embed] });
@@ -222,18 +333,34 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
         .setColor(status.running ? 0x00ff7f : 0xff4500)
         .setTitle('📊 Trạng thái Discord Feed Bot')
         .addFields(
-          { name: '🔄 Scheduler', value: status.running ? '🟢 Running' : '🔴 Stopped', inline: true },
+          {
+            name: '🔄 Scheduler',
+            value: status.running ? '🟢 Running' : '🔴 Stopped',
+            inline: true,
+          },
           { name: '⏱️ Uptime', value: uptimeStr, inline: true },
-          { name: '💾 RAM (RSS / Heap)', value: `${rssMb} MB / ${heapUsedMb} MB`, inline: true },
-          { name: '🎯 Targets', value: `${status.activeTargets} active / ${status.totalTargets} total`, inline: true },
+          {
+            name: '💾 RAM (RSS / Heap)',
+            value: `${rssMb} MB / ${heapUsedMb} MB`,
+            inline: true,
+          },
+          {
+            name: '🎯 Targets',
+            value: `${status.activeTargets} active / ${status.totalTargets} total`,
+            inline: true,
+          },
           {
             name: '🕒 Quét gần nhất',
-            value: status.lastPollTime ? status.lastPollTime.toLocaleTimeString() : 'Chưa có',
+            value: status.lastPollTime
+              ? status.lastPollTime.toLocaleTimeString()
+              : 'Chưa có',
             inline: true,
           },
           {
             name: '⚠️ Lỗi gần nhất',
-            value: status.lastError ? `\`${status.lastError.slice(0, 100)}\`` : 'Không có',
+            value: status.lastError
+              ? `\`${status.lastError.slice(0, 100)}\``
+              : 'Không có',
             inline: false,
           },
         )
@@ -244,7 +371,10 @@ export async function handleFeedCommand(interaction: ChatInputCommandInteraction
     }
 
     default: {
-      await interaction.reply({ content: '❓ Subcommand không xác định.', ephemeral: true });
+      await interaction.reply({
+        content: '❓ Subcommand không xác định.',
+        ephemeral: true,
+      });
     }
   }
 }

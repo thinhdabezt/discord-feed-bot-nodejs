@@ -11,6 +11,7 @@ export interface Target {
   handle: string;
   webhookUrl: string;
   enabled: boolean;
+  mediaOnly?: boolean; // true: chỉ gửi bài viết có ảnh hoặc video (mặc định: true)
 }
 
 export interface TargetsConfig {
@@ -20,6 +21,7 @@ export interface TargetsConfig {
     pollIntervalMinMs: number;
     pollIntervalMaxMs: number;
     delayBetweenTargetsMs: number | [number, number];
+    mediaOnlyDefault?: boolean; // Giá trị mặc định áp dụng nếu target chưa cấu hình
   };
   admin?: {
     webhookUrl?: string;
@@ -69,6 +71,7 @@ export class ConfigManager extends EventEmitter {
           pollIntervalMinMs: 240000,
           pollIntervalMaxMs: 420000,
           delayBetweenTargetsMs: [2000, 5000],
+          mediaOnlyDefault: true,
         },
       };
     }

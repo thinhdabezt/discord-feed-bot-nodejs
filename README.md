@@ -103,9 +103,10 @@ Bot cung cấp nhóm lệnh `/feed` (chỉ dành cho Administrator):
 
 | Lệnh | Mô tả |
 | :--- | :--- |
-| `/feed add <platform> <handle> [webhook_url]` | Thêm tài khoản mới vào danh sách theo dõi |
+| `/feed add <platform> <handle> [webhook_url] [media_only]` | Thêm tài khoản mới vào danh sách theo dõi (mặc định: `media_only=True`) |
+| `/feed set-filter <platform> <handle> <media_only>` | Bật/tắt bộ lọc chỉ lấy bài có Ảnh/Video cho tài khoản (`True`/`False`) |
 | `/feed remove <platform> <handle>` | Xóa tài khoản khỏi danh sách |
-| `/feed list` | Xem danh sách các tài khoản đang theo dõi |
+| `/feed list` | Xem danh sách các tài khoản đang theo dõi kèm nhãn `[🖼️ Media Only]` hoặc `[📄 All Posts]` |
 | `/feed status` | Xem trạng thái bot, uptime, RAM (RSS/Heap), lần quét gần nhất |
 
 ---

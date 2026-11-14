@@ -6,7 +6,9 @@ export interface FeedItem {
   authorAvatar?: string;
   content: string;
   url: string;
-  mediaUrls: string[];
+  mediaUrls: string[];     // Danh sách link ảnh / thumbnail video
+  videoUrl?: string;       // Link file video MP4 chất lượng cao (nếu có)
+  hasMedia: boolean;       // true nếu có ảnh hoặc video
   createdAt: Date;
 }
 

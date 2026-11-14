@@ -5,16 +5,17 @@
       "platform": "x",
       "handle": "example_user",
       "webhookUrl": "https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN",
-      "enabled": true
+      "enabled": true,
+      "mediaOnly": true
     }
   ],
   "settings": {
     "pollIntervalMinMs": 240000,
     "pollIntervalMaxMs": 420000,
-    "delayBetweenTargetsMs": [2000, 5000]
+    "delayBetweenTargetsMs": [2000, 5000],
+    "mediaOnlyDefault": true
   },
   "admin": {
     "webhookUrl": "https://discord.com/api/webhooks/ADMIN_WEBHOOK_ID/ADMIN_WEBHOOK_TOKEN"
   }
 }
-
