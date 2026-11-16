@@ -199,6 +199,27 @@ export class Scheduler {
     const isMediaOnly =
       target.mediaOnly ?? targetsConfig.settings.mediaOnlyDefault ?? true;
 
+    // ── Xử lý Cold Start: Lần đầu quét target ──────────────────────
+    const isFirstSync = !this.database.isTargetSynced(
+      target.platform,
+      target.handle,
+    );
+    const syncMode = targetsConfig.settings.initialSyncMode ?? 'skip_old';
+
+    if (isFirstSync && syncMode === 'skip_old') {
+      logger.info(
+        `[Initial Sync] Lần đầu theo dõi ${target.platform}/@${target.handle}. Đánh dấu ${items.length} bài hiện tại là đã xem để tránh spam bài cũ.`,
+      );
+      for (const item of items) {
+        this.database.markPostSeen(item);
+      }
+      this.database.markTargetSynced(target.platform, target.handle);
+      return;
+    }
+
+    // Sắp xếp bài từ cũ nhất đến mới nhất để hiển thị theo trình tự thời gian trên Discord
+    items.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
     let newCount = 0;
     for (const item of items) {
       if (!this.database.isPostSeen(item.id)) {
@@ -207,7 +228,7 @@ export class Scheduler {
           logger.debug(
             `[Filter] Bỏ qua bài viết text-only ${item.id} của @${target.handle} (mediaOnly=true)`,
           );
-          // Mark post as seen so we don't re-process in subsequent cycles
+          // Đánh dấu đã xem để không duyệt lại ở chu kỳ sau
           this.database.markPostSeen(item);
           continue;
         }
@@ -217,6 +238,9 @@ export class Scheduler {
         newCount++;
       }
     }
+
+    // Đánh dấu đã đồng bộ
+    this.database.markTargetSynced(target.platform, target.handle);
 
     if (newCount > 0) {
       logger.info(

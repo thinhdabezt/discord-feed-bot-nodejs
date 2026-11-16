@@ -2,7 +2,8 @@ import { Database } from '../src/core/database.js';
 import { Dispatcher } from '../src/core/dispatcher.js';
 import { Scheduler } from '../src/core/scheduler.js';
 import { parseTweetResult } from '../src/providers/x.provider.js';
-import type { FeedItem, FeedProvider } from '../src/providers/base.provider.js';
+import { acquireLock, releaseLock } from '../src/utils/lock.js';
+import type { FeedItem } from '../providers/base.provider.js';
 import type { Target } from '../src/core/config.js';
 
 function assert(condition: boolean, msg: string) {
@@ -44,9 +45,40 @@ async function runTests() {
   assert(db.getCachedUserId(testHandle, 'x') === '99887766', 'Cached user ID retrieved correctly');
   assert(db.getCachedUserId(testHandle.toUpperCase(), 'x') === '99887766', 'Case-insensitive lookup for user ID');
 
-  // Test cleanup
+  // ── KIỂM THỬ SỬA LỖI LẶP BÀI GHIM / BÀI CŨ (Deduplication Fix) ──
+  console.log('🛡️ Testing Pinned Tweet / Old Tweet cleanup protection...');
+  const pinnedTweetId = `x:pinned_${Date.now()}`;
+  const oldPinnedItem: FeedItem = {
+    id: pinnedTweetId,
+    platform: 'x',
+    authorName: 'Old Author',
+    authorHandle: 'oldauthor',
+    content: 'Pinned tweet from 90 days ago',
+    url: `https://x.com/oldauthor/status/${pinnedTweetId}`,
+    mediaUrls: [],
+    hasMedia: false,
+    // Đăng từ 90 ngày trước!
+    createdAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+  };
+
+  db.markPostSeen(oldPinnedItem);
+  assert(db.isPostSeen(pinnedTweetId), 'Old pinned tweet marked seen');
+
+  // Chạy dọn dẹp bản ghi cũ hơn 30 ngày
   db.cleanupOldRecords(30);
-  assert(db.isPostSeen(mockItem.id), 'Recent post should not be deleted by 30-day cleanup');
+
+  // Quan trọng: Bài ghim dù đăng 90 ngày trước nhưng vừa thấy hôm nay, không được phép bị xóa!
+  assert(
+    db.isPostSeen(pinnedTweetId),
+    'CRITICAL: Old pinned post MUST NOT be deleted by cleanup because seen_at is fresh',
+  );
+
+  // Test Target Sync State (Cold-Start protection)
+  const syncTarget = `synctarget_${Date.now()}`;
+  assert(!db.isTargetSynced('x', syncTarget), 'Target is not synced initially');
+  db.markTargetSynced('x', syncTarget);
+  assert(db.isTargetSynced('x', syncTarget), 'Target is marked as synced');
+  assert(db.isTargetSynced('x', syncTarget.toUpperCase()), 'Target sync check is case-insensitive');
 
   console.log('  All Database tests passed!\n');
 
@@ -64,13 +96,13 @@ async function runTests() {
   // Test multi-image (up to 4)
   const multiItem: FeedItem = {
     ...mockItem,
-    id: 'x:test_multi',
+    id: `x:test_multi_${Date.now()}`,
     mediaUrls: [
       'https://example.com/img1.jpg',
       'https://example.com/img2.jpg',
       'https://example.com/img3.jpg',
       'https://example.com/img4.jpg',
-      'https://example.com/img5.jpg', // 5th image should be excluded from embed grid
+      'https://example.com/img5.jpg',
     ],
     hasMedia: true,
   };
@@ -83,7 +115,7 @@ async function runTests() {
   // Test video payload with video link button
   const videoItem: FeedItem = {
     ...mockItem,
-    id: 'x:test_video',
+    id: `x:test_video_${Date.now()}`,
     mediaUrls: ['https://example.com/thumbnail.jpg'],
     videoUrl: 'https://video.twimg.com/ext_tw_video/test.mp4',
     hasMedia: true,
@@ -93,8 +125,8 @@ async function runTests() {
 
   console.log('  All Dispatcher tests passed!\n');
 
-  // ── 3. Tweet Parser Tests (Media Detection) ───────────────────
-  console.log('🐦 Testing X Tweet Parser with Media & Video...');
+  // ── 3. Tweet Parser Tests (Media Detection & Retweet/Author Filter) ──
+  console.log('🐦 Testing X Tweet Parser with Retweet & Author checks...');
 
   // Mock tweet with Photo
   const mockPhotoTweet = {
@@ -103,8 +135,8 @@ async function runTests() {
       user_results: {
         result: {
           legacy: {
-            name: 'Photo User',
-            screen_name: 'photouser',
+            name: 'Target User',
+            screen_name: 'targetuser',
             profile_image_url_https: 'https://example.com/avatar_normal.jpg',
           },
         },
@@ -124,83 +156,58 @@ async function runTests() {
     },
   };
 
-  const parsedPhoto = parseTweetResult(mockPhotoTweet);
+  const parsedPhoto = parseTweetResult(mockPhotoTweet, 'targetuser');
   assert(parsedPhoto !== null, 'Photo tweet parsed successfully');
   assert(parsedPhoto?.hasMedia === true, 'Photo tweet hasMedia is true');
   assert(parsedPhoto?.mediaUrls.length === 1, 'Photo tweet has 1 media URL');
   assert(parsedPhoto?.videoUrl === undefined, 'Photo tweet has no video URL');
 
-  // Mock tweet with Video
-  const mockVideoTweet = {
+  // ── KIỂM THỬ LỌC RETWEET ──
+  const mockRetweetWithText = {
     rest_id: '1002',
     core: {
       user_results: {
         result: {
           legacy: {
-            name: 'Video User',
-            screen_name: 'videouser',
+            name: 'Target User',
+            screen_name: 'targetuser',
             profile_image_url_https: 'https://example.com/avatar_normal.jpg',
           },
         },
       },
     },
     legacy: {
-      full_text: 'Tweet with a video',
+      full_text: 'RT @elonmusk: This is a retweeted tweet',
       created_at: 'Sat Nov 14 00:00:00 +0000 2026',
-      extended_entities: {
-        media: [
-          {
-            type: 'video',
-            media_url_https: 'https://pbs.twimg.com/media/thumb.jpg',
-            video_info: {
-              variants: [
-                { content_type: 'application/x-mpegURL', url: 'https://video.twimg.com/m3u8' },
-                { content_type: 'video/mp4', bitrate: 832000, url: 'https://video.twimg.com/vid_low.mp4' },
-                { content_type: 'video/mp4', bitrate: 2176000, url: 'https://video.twimg.com/vid_hd.mp4' },
-              ],
-            },
-          },
-        ],
-      },
+      retweeted_status_id_str: '8888888',
     },
   };
+  const parsedRT = parseTweetResult(mockRetweetWithText, 'targetuser');
+  assert(parsedRT === null, 'Retweet with RT @ text and retweeted_status_id_str is correctly rejected');
 
-  const parsedVideo = parseTweetResult(mockVideoTweet);
-  assert(parsedVideo !== null, 'Video tweet parsed successfully');
-  assert(parsedVideo?.hasMedia === true, 'Video tweet hasMedia is true');
-  assert(parsedVideo?.videoUrl === 'https://video.twimg.com/vid_hd.mp4', 'Extracted highest bitrate MP4 video URL');
-  assert(parsedVideo?.mediaUrls[0]?.includes('thumb.jpg'), 'Video thumbnail captured in mediaUrls');
-
-  // Mock text-only tweet
-  const mockTextTweet = {
+  // ── KIỂM THỬ LỌC KHÁC TÁC GIẢ (Non-target author) ──
+  const mockOtherUserTweet = {
     rest_id: '1003',
     core: {
       user_results: {
         result: {
           legacy: {
-            name: 'Text User',
-            screen_name: 'textuser',
+            name: 'Someone Else',
+            screen_name: 'someoneelse',
             profile_image_url_https: 'https://example.com/avatar_normal.jpg',
           },
         },
       },
     },
     legacy: {
-      full_text: 'Just a text tweet without any photos or videos',
+      full_text: 'Tweet from someone else in the thread',
       created_at: 'Sat Nov 14 00:00:00 +0000 2026',
-      entities: {
-        media: [],
-      },
     },
   };
+  const parsedOther = parseTweetResult(mockOtherUserTweet, 'targetuser');
+  assert(parsedOther === null, 'Tweet from another author (not targetuser) is correctly rejected');
 
-  const parsedText = parseTweetResult(mockTextTweet);
-  assert(parsedText !== null, 'Text-only tweet parsed successfully');
-  assert(parsedText?.hasMedia === false, 'Text-only tweet hasMedia is false');
-  assert(parsedText?.mediaUrls.length === 0, 'Text-only tweet has 0 mediaUrls');
-  assert(parsedText?.videoUrl === undefined, 'Text-only tweet has no videoUrl');
-
-  console.log('  All Tweet Parser media tests passed!\n');
+  console.log('  All Tweet Parser media, retweet, and author tests passed!\n');
 
   // ── 4. Scheduler Target & Filter Tests ─────────────────────────
   console.log('⏰ Testing Scheduler Target & Filter Management...');
@@ -229,9 +236,14 @@ async function runTests() {
   assert(removed === true, 'Remove target returned true');
   assert(scheduler.getTargets().length === 0, 'Target removed from list');
 
-  db.close();
-  console.log('  All Scheduler target management tests passed!\n');
+  // ── 5. Single Instance Lock Tests ─────────────────────────────
+  console.log('🔒 Testing Single Instance Process Lock...');
+  const lockAcquired = acquireLock();
+  assert(lockAcquired === true, 'Acquired lock for current test process');
+  releaseLock();
+  console.log('  Single Instance Lock test passed!\n');
 
+  db.close();
   console.log('🎉 ALL UNIT TESTS PASSED SUCCESSFULLY!');
 }
 

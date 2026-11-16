@@ -22,6 +22,7 @@ export interface TargetsConfig {
     pollIntervalMaxMs: number;
     delayBetweenTargetsMs: number | [number, number];
     mediaOnlyDefault?: boolean; // Giá trị mặc định áp dụng nếu target chưa cấu hình
+    initialSyncMode?: 'skip_old' | 'send_all'; // 'skip_old': đánh dấu bài cũ là đã xem, không spam Discord (mặc định)
   };
   admin?: {
     webhookUrl?: string;
@@ -72,6 +73,7 @@ export class ConfigManager extends EventEmitter {
           pollIntervalMaxMs: 420000,
           delayBetweenTargetsMs: [2000, 5000],
           mediaOnlyDefault: true,
+          initialSyncMode: 'skip_old',
         },
       };
     }

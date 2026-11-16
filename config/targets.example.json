@@ -13,7 +13,8 @@
     "pollIntervalMinMs": 240000,
     "pollIntervalMaxMs": 420000,
     "delayBetweenTargetsMs": [2000, 5000],
-    "mediaOnlyDefault": true
+    "mediaOnlyDefault": true,
+    "initialSyncMode": "skip_old"
   },
   "admin": {
     "webhookUrl": "https://discord.com/api/webhooks/ADMIN_WEBHOOK_ID/ADMIN_WEBHOOK_TOKEN"

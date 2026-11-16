@@ -11,6 +11,7 @@ import { scheduler } from './core/scheduler.js';
 import { dispatcher } from './core/dispatcher.js';
 import { xProvider } from './providers/x.provider.js';
 import { createBot, startBot } from './bot/client.js';
+import { acquireLock, releaseLock } from './utils/lock.js';
 
 async function bootstrap() {
   logger.info('=============================================');
@@ -18,6 +19,12 @@ async function bootstrap() {
   logger.info(`📦 Node.js version: ${process.version}`);
   logger.info(`🖥️  Platform / Arch: ${process.platform} / ${process.arch}`);
   logger.info('=============================================');
+
+  // 0. Single-Instance Check (Chống chạy đè 2 tiến trình gây lặp bài)
+  if (!acquireLock()) {
+    logger.error('Dừng tiến trình để tránh gửi bài viết trùng lặp.');
+    process.exit(1);
+  }
 
   // 1. Initialize Database
   database.init();
@@ -68,6 +75,7 @@ async function handleShutdown(signal: string) {
     scheduler.stop();
     unwatchSessions();
     database.close();
+    releaseLock();
   } catch (err) {
     logger.error('Error during shutdown:', err);
   }
@@ -90,5 +98,6 @@ process.on('uncaughtException', (err) => {
 // Run
 bootstrap().catch((err) => {
   logger.error('Fatal bootstrap error:', err);
+  releaseLock();
   process.exit(1);
 });

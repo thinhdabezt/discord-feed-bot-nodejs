@@ -123,8 +123,13 @@ async function resolveRestId(handle: string, db: Database): Promise<string> {
 
 /**
  * Parse a single tweet result object into a FeedItem.
+ * @param result Raw tweet result from GraphQL
+ * @param expectedHandle Optional: handle of the expected author to reject other people's tweets
  */
-export function parseTweetResult(result: any): FeedItem | null {
+export function parseTweetResult(
+  result: any,
+  expectedHandle?: string,
+): FeedItem | null {
   try {
     const tweet =
       result.__typename === 'TweetWithVisibilityResults'
@@ -137,12 +142,46 @@ export function parseTweetResult(result: any): FeedItem | null {
     const userLegacy = tweet.core?.user_results?.result?.legacy;
     if (!userLegacy) return null;
 
-    // Skip retweets
-    if (legacy.retweeted_status_result) return null;
+    // 1. Kiểm tra Retweet triệt để qua nhiều trường phản hồi của X
+    const isRetweet = Boolean(
+      legacy.retweeted_status_result ||
+      tweet.retweeted_status_result ||
+      legacy.retweeted_status_id_str ||
+      (typeof legacy.full_text === 'string' && legacy.full_text.startsWith('RT @')),
+    );
+
+    if (isRetweet) {
+      logger.debug(`Skipping retweet: ${tweet.rest_id}`);
+      return null;
+    }
 
     const tweetId: string = tweet.rest_id;
     const authorHandle: string = userLegacy.screen_name;
     const authorName: string = userLegacy.name;
+
+    // 2. Kiểm tra quyền tác giả: chỉ nhận bài của chính target đang theo dõi
+    if (
+      expectedHandle &&
+      authorHandle.toLowerCase() !== expectedHandle.toLowerCase()
+    ) {
+      logger.debug(
+        `Skipping tweet from @${authorHandle} because target is @${expectedHandle}`,
+      );
+      return null;
+    }
+
+    // 3. Bỏ qua các bài trả lời người khác (không phải self-thread)
+    if (
+      legacy.in_reply_to_screen_name &&
+      expectedHandle &&
+      legacy.in_reply_to_screen_name.toLowerCase() !== expectedHandle.toLowerCase()
+    ) {
+      logger.debug(
+        `Skipping reply by @${authorHandle} to @${legacy.in_reply_to_screen_name}`,
+      );
+      return null;
+    }
+
     const authorAvatar: string = (
       userLegacy.profile_image_url_https ?? ''
     ).replace('_normal', '_400x400');
@@ -254,18 +293,19 @@ export class XProvider implements FeedProvider {
       const items: FeedItem[] = [];
 
       for (const entry of addEntries.entries) {
-        // Only process tweet entries (skip pinned indicators, cursors, etc.)
+        // Only process tweet entries (skip cursors, who to follow, ads, etc.)
         if (!entry.entryId?.startsWith('tweet-')) continue;
 
         const tweetResult =
           entry.content?.itemContent?.tweet_results?.result;
         if (!tweetResult) continue;
 
-        const item = parseTweetResult(tweetResult);
+        // Truyền handle mong đợi để lọc bỏ các bài không phải do target đăng
+        const item = parseTweetResult(tweetResult, handle);
         if (item) items.push(item);
       }
 
-      logger.info(`Fetched ${items.length} tweets for @${handle}`);
+      logger.info(`Fetched ${items.length} valid tweet(s) for @${handle}`);
       return items;
     } catch (error) {
       if (error instanceof AuthError) {

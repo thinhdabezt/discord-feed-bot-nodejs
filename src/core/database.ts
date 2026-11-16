@@ -19,11 +19,40 @@ export class Database {
     logger.info(`Opening database at ${DB_PATH}`);
     this.db = new DatabaseSync(DB_PATH);
 
+    // Bật WAL mode & synchronous = NORMAL để đảm bảo hiệu năng và dữ liệu bền vững ngay cả khi app bị tắt đột ngột
+    this.db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+    `);
+
+    // Bảng lưu trữ bài viết đã xem (seen_at là thời điểm bot phát hiện, created_at là thời điểm bài được đăng)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS posts (
         id TEXT PRIMARY KEY,
         platform TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        seen_at INTEGER NOT NULL
+      );
+    `);
+
+    // Tự động kiểm tra và nâng cấp schema nếu cột seen_at chưa có (migration an toàn)
+    const tableInfo = this.db.prepare('PRAGMA table_info(posts)').all() as any[];
+    const hasSeenAt = tableInfo.some((col) => col.name === 'seen_at');
+    if (!hasSeenAt) {
+      logger.info('Migrating posts table: adding seen_at column');
+      this.db.exec(`
+        ALTER TABLE posts ADD COLUMN seen_at INTEGER;
+        UPDATE posts SET seen_at = created_at WHERE seen_at IS NULL;
+      `);
+    }
+
+    // Bảng lưu trạng thái đồng bộ ban đầu của các targets (để tránh spam 5 bài cũ khi vừa thêm target)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS target_state (
+        platform TEXT NOT NULL,
+        handle TEXT NOT NULL,
+        last_synced_at INTEGER NOT NULL,
+        PRIMARY KEY (platform, handle)
       );
     `);
 
@@ -36,7 +65,7 @@ export class Database {
       );
     `);
 
-    logger.info('Database initialized successfully');
+    logger.info('Database initialized successfully with WAL mode');
   }
 
   private ensureInit(): DatabaseSync {
@@ -55,11 +84,34 @@ export class Database {
 
   markPostSeen(item: FeedItem): void {
     const db = this.ensureInit();
+    const now = Date.now();
+    const createdAt = item.createdAt instanceof Date && !isNaN(item.createdAt.getTime())
+      ? item.createdAt.getTime()
+      : now;
+
     const stmt = db.prepare(
-      'INSERT OR IGNORE INTO posts (id, platform, created_at) VALUES (?, ?, ?)',
+      'INSERT OR IGNORE INTO posts (id, platform, created_at, seen_at) VALUES (?, ?, ?, ?)',
     );
-    stmt.run(item.id, item.platform, item.createdAt.getTime());
+    stmt.run(item.id, item.platform, createdAt, now);
     logger.debug(`Marked post as seen: ${item.id}`);
+  }
+
+  isTargetSynced(platform: string, handle: string): boolean {
+    const db = this.ensureInit();
+    const stmt = db.prepare(
+      'SELECT 1 FROM target_state WHERE platform = ? AND handle = ?',
+    );
+    const row = stmt.get(platform, handle.toLowerCase());
+    return row !== undefined;
+  }
+
+  markTargetSynced(platform: string, handle: string): void {
+    const db = this.ensureInit();
+    const stmt = db.prepare(
+      'INSERT OR REPLACE INTO target_state (platform, handle, last_synced_at) VALUES (?, ?, ?)',
+    );
+    stmt.run(platform, handle.toLowerCase(), Date.now());
+    logger.debug(`Marked target as synced: ${platform}/@${handle}`);
   }
 
   cacheUserId(handle: string, platform: string, restId: string): void {
@@ -80,12 +132,16 @@ export class Database {
     return row?.rest_id;
   }
 
+  /**
+   * Xóa các bài viết cũ hơn X ngày DỰA TRÊN seen_at (thời điểm bot phát hiện).
+   * Tuyệt đối không xóa dựa trên created_at để tránh xóa nhầm Pinned Tweets hoặc các bài cũ của tài khoản ít đăng.
+   */
   cleanupOldRecords(days = 30): void {
     const db = this.ensureInit();
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-    const stmt = db.prepare('DELETE FROM posts WHERE created_at < ?');
+    const stmt = db.prepare('DELETE FROM posts WHERE seen_at < ?');
     stmt.run(cutoff);
-    logger.info(`Cleaned up posts older than ${days} days`);
+    logger.info(`Cleaned up posts seen older than ${days} days`);
   }
 
   close(): void {
