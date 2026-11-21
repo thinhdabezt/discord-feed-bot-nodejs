@@ -80,6 +80,48 @@ async function runTests() {
   assert(db.isTargetSynced('x', syncTarget), 'Target is marked as synced');
   assert(db.isTargetSynced('x', syncTarget.toUpperCase()), 'Target sync check is case-insensitive');
 
+  // ── KIỂM THỬ UPSERT: markPostSeen phải refresh seen_at khi gọi lại ──
+  console.log('🔄 Testing UPSERT: markPostSeen refreshes seen_at on re-call...');
+  const upsertId = `x:upsert_${Date.now()}`;
+  const upsertItem: FeedItem = {
+    id: upsertId,
+    platform: 'x',
+    authorName: 'Upsert Test',
+    authorHandle: 'upserttest',
+    content: 'Testing upsert behavior',
+    url: `https://x.com/upserttest/status/${upsertId}`,
+    mediaUrls: [],
+    hasMedia: false,
+    createdAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000), // 90 ngày trước
+  };
+
+  // Bước 1: insert bài lần đầu
+  db.markPostSeen(upsertItem);
+  assert(db.isPostSeen(upsertId), 'UPSERT: Post inserted on first call');
+
+  // Bước 2: Giả lập scenario migration cũ — manually set seen_at = created_at (90 ngày trước)
+  const rawDb = (db as any).db;
+  const oldSeenAt = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  rawDb.prepare('UPDATE posts SET seen_at = ? WHERE id = ?').run(oldSeenAt, upsertId);
+
+  // Xác nhận seen_at đã bị set về giá trị cũ
+  const beforeRow = rawDb.prepare('SELECT seen_at FROM posts WHERE id = ?').get(upsertId) as any;
+  assert(beforeRow.seen_at === oldSeenAt, 'UPSERT: seen_at manually set to 90 days ago');
+
+  // Bước 3: Gọi markPostSeen lần 2 (giả lập bot crawl lại bài này)
+  db.markPostSeen(upsertItem);
+
+  // Bước 4: Kiểm tra seen_at đã được refresh về hiện tại
+  const afterRow = rawDb.prepare('SELECT seen_at FROM posts WHERE id = ?').get(upsertId) as any;
+  const timeDiff = Math.abs(afterRow.seen_at - Date.now());
+  assert(timeDiff < 5000, 'UPSERT: seen_at refreshed to current time (within 5s)');
+
+  // Bước 5: Chạy cleanup 30 ngày — bài này KHÔNG bị xóa vì seen_at mới
+  db.cleanupOldRecords(30);
+  assert(db.isPostSeen(upsertId), 'UPSERT: Post survives cleanup because seen_at was refreshed');
+
+  console.log('  UPSERT fix verified — no more 24h duplicate bug!');
+
   console.log('  All Database tests passed!\n');
 
   // ── 2. Dispatcher Payload Tests ────────────────────────────────

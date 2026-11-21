@@ -46,6 +46,16 @@ export class Database {
       `);
     }
 
+    // Fix: Refresh tất cả seen_at cũ/stale (từ migration hoặc code cũ) về thời điểm hiện tại.
+    // Điều này ngăn cleanupOldRecords() xóa nhầm các bài có seen_at = created_at cũ.
+    const now = Date.now();
+    const staleCutoff = now - 7 * 24 * 60 * 60 * 1000; // Nếu seen_at > 7 ngày trước → coi là stale
+    const refreshStmt = this.db.prepare('UPDATE posts SET seen_at = ? WHERE seen_at < ?');
+    const result = refreshStmt.run(now, staleCutoff) as any;
+    if (result?.changes > 0) {
+      logger.info(`Refreshed ${result.changes} stale seen_at records to current time`);
+    }
+
     // Bảng lưu trạng thái đồng bộ ban đầu của các targets (để tránh spam 5 bài cũ khi vừa thêm target)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS target_state (
@@ -90,7 +100,7 @@ export class Database {
       : now;
 
     const stmt = db.prepare(
-      'INSERT OR IGNORE INTO posts (id, platform, created_at, seen_at) VALUES (?, ?, ?, ?)',
+      'INSERT INTO posts (id, platform, created_at, seen_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at',
     );
     stmt.run(item.id, item.platform, createdAt, now);
     logger.debug(`Marked post as seen: ${item.id}`);
